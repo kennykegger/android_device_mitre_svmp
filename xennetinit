@@ -1,0 +1,106 @@
+#!/system/bin/sh
+# xennetinit: A script to set the Rackspace cloud assigned IP address, netmask, DNS and default gateway.
+# Most Linux systems use the agent-nova/agent-smith suite but as our VMs are Android we needed a customized version.
+# This script uses the default commands available on Android to get the networking info via xenfs.
+# It is assumed thant the VM is running on the Rackspace public cloud, the Hypervisor is XenServer and Xen
+# support has been compiled into the kernel and that the Xen Tools (xenstore-*) are located in /system/bin.
+# I was able to execute the Xen Tool binaries in their distributed form as is on Android so no special
+# compilation was required.
+# Add this script to the init so it's called during the bootup.
+
+# CONFIGURE ME HERE #
+LD="" #/dev/tty0" # Console to log to. Make blank if you just want stdout.
+
+# Print log output to the configured console
+pl(){
+    if [ -z "$LD" ]
+    then
+        echo $@
+    else
+        echo $@ > $LD
+    fi
+}
+
+# STEP #1
+# Get eth0's MAC address, strip the ':' and convert any lower case characters to upper case
+UPPER_CASE_MAC_ADDRESS=""
+uc(){
+    case "$1" in
+        [a])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}A"
+        ;;
+        [b])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}B"
+        ;;
+        [c])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}C"
+        ;;
+        [d])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}D"
+        ;;
+        [e])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}E"
+        ;;
+        [f])
+        UPPER_CASE_MAC_ADDRESS="${UPPER_CASE_MAC_ADDRESS}F"
+        ;;
+    [0-9])
+        UPPER_CASE_MAC_ADDRESS="$UPPER_CASE_MAC_ADDRESS$1"
+        ;;
+    esac
+}
+pl
+pl xennetinit START
+pl Getting eth0\'s MAC address...
+pl 'netcfg | grep eth0 | grep -ioE "[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}"'
+ETH0_MAC_ADDRESS=$(netcfg | grep eth0 | grep -ioE "[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}\:[A-F0-9]{2}")
+pl ETH0_MAC_ADDRESS=$ETH0_MAC_ADDRESS
+pl Converting MAC into upper case with no colon...
+i=0
+while [ ${#ETH0_MAC_ADDRESS} -gt $i ]
+do
+	ch=${ETH0_MAC_ADDRESS:$i:1}
+	uc $ch
+    i=$((i+1))
+done
+pl UPPER_CASE_MAC_ADDRESS=$UPPER_CASE_MAC_ADDRESS
+
+
+# STEP #2
+# Extract all IPs from the xenfs vm-data/networking/<MAC ADDRESS> repository
+# JSON parsing is a icky at best using pure shell scripting, and without the help of such friends as awk, sed, tr, cut etc
+# on Android we have a hack below that works assuming the order of the JSON elements don't change:
+# Example output from an Ubuntu Rackspace cloud server:
+#root@proxy:~# xenstore-read vm-data/networking/BC764E2060B0 
+#{"ip6s": [{"ip": "2001:4802:7801:0103:decd:6b3e:ff20:60b0", "netmask": 64, "enabled": "1", "gateway": "fe80::def"}], "label": "public", "broadcast": "162.242.234.255", "ips": [{"ip": "162.242.234.187", "netmask": "255.255.255.0", "enabled": "1", "gateway": "162.242.234.1"}], "mac": "BC:76:4E:20:60:B0", "gateway_v6": "fe80::def", "dns": ["69.20.0.164", "69.20.0.196"], "gateway": "162.242.234.1"}
+pl xenstore-read vm-data/networking/$UPPER_CASE_MAC_ADDRESS
+pl $(xenstore-read vm-data/networking/$UPPER_CASE_MAC_ADDRESS)
+IPS=$(xenstore-read vm-data/networking/$UPPER_CASE_MAC_ADDRESS | grep -oE "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}")
+pl IPS=$IPS
+IPSARR=(${IPS// / }) # split the $IPS into an array
+BROADCAST=${IPSARR[0]}  # Broadcast address
+pl BROADCAST=$BROADCAST
+MYIP=${IPSARR[1]} # Address of the virtual machine (static IP assigned by Rackspace)
+pl MYIP=$MYIP
+NETMASK=${IPSARR[2]}  # Netmask
+pl NETMASK=$NETMASK
+GATEWAY=${IPSARR[3]} # Gateway address
+pl GATEWAY=$GATEWAY
+DNS1=${IPSARR[4]} # Primary DNS server
+pl DNS1=$DNS1
+DNS2=${IPSARR[5]} # Secondary DNS server
+pl DNS2=$DNS2
+
+# STEP #3
+# Configure the network
+pl ifconfig eth0 $MYIP netmask $NETMASK # VM's IP
+ifconfig eth0 $MYIP netmask $NETMASK 
+pl route add default gw $GATEWAY dev eth0 # Gateway to outside world
+route add default gw $GATEWAY dev eth0
+pl setprop net.eth0.dns1 $DNS1 # Primary DNS server
+setprop net.eth0.dns1 $DNS1
+pl setprop net.eth0.dns2 $DNS2 # Secondary DNS server
+setprop net.eth0.dns2 $DNS2
+
+# END
+pl xennetinit DONE
